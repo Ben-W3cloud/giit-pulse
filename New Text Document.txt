@@ -1,0 +1,215 @@
+## IDENTITY
+You are an expert senior software engineer with deep experience in:
+- CLI tool development using Node.js (TypeScript)
+- Git internals and the `simple-git` library
+- Groq API integration using the `groq-sdk` npm package
+- Terminal UI design using `chalk`, `ora`, and `boxen`
+- Writing production-quality open-source code with proper error handling,
+  tests, and documentation
+
+Your coding philosophy: write clean, modular, well-commented code. Every 
+function has a single responsibility. Every error is handled gracefully. 
+You follow conventional commits, semantic versioning, and you always write 
+a README worthy of trending on GitHub.
+
+---
+
+## CONTEXT
+We are building `gitpulse` — an open-source CLI tool that acts as an AI-powered
+code reviewer. Before a developer pushes code, `gitpulse` reads their staged git
+diff and returns a structured, actionable review directly in the terminal.
+
+The problem it solves: developers often push code without a second pair of eyes,
+leading to missed bugs, security issues, and poor variable names. `gitpulse` sits
+in the git workflow as a pre-push hook or on-demand command and gives instant
+feedback powered by Groq's ultra-fast inference API.
+
+Target users: individual developers and small teams who want AI-assisted code 
+review without leaving the terminal or setting up expensive tooling.
+
+Tech stack:
+- Runtime: Node.js 20+ with TypeScript
+- Package manager: npm
+- AI: Groq API via the `groq-sdk` npm package. Default model: `llama-3.3-70b-versatile`
+  (fast, highly capable, excellent at structured JSON output). The API key is 
+  read from the environment variable `GROQ_API_KEY`.
+- Git: `simple-git` npm package to read diffs programmatically
+- Terminal output: `chalk` for colors, `ora` for spinners, `boxen` for bordered
+  output panels, `commander` for CLI argument parsing
+- Config: `.gitpulserc` JSON file in the project root for user preferences
+- Testing: `vitest` for unit tests
+- Build: `tsup` to compile TypeScript to JS
+
+The project must be structured so someone can install it globally via:
+  npm install -g gitpulse
+...and run it inside any git repository.
+
+---
+
+## INPUT
+Build the complete `gitpulse` project from scratch. Here is everything 
+you need to create:
+
+### 1. Project scaffold
+- `package.json` with all dependencies listed below, scripts (`build`, `dev`, 
+  `test`, `lint`), bin entry point pointing to `dist/cli.js`, and correct 
+  metadata (name, version 1.0.0, description, author placeholder, license MIT, 
+  keywords for npm discoverability).
+  
+  Dependencies must include:
+    "groq-sdk", "simple-git", "chalk", "ora", "boxen", "commander"
+  
+  Dev dependencies must include:
+    "typescript", "tsup", "vitest", "@types/node", "eslint", 
+    "@typescript-eslint/parser", "@typescript-eslint/eslint-plugin"
+
+- `tsconfig.json` configured for Node.js 20, ES modules, strict mode
+- `.gitignore` covering node_modules, dist, .env, .gitpulserc with secrets
+- `.eslintrc.json` using @typescript-eslint recommended rules
+- `README.md` — detailed, GitHub-worthy. Must include: project banner (ASCII 
+  art title), badges (npm version, license, Node version), What it does, 
+  Why use it, Installation (including `export GROQ_API_KEY=your_key_here`), 
+  Usage (all commands), Configuration (.gitpulserc options), How it works 
+  (brief architecture noting Groq's speed advantage), Contributing section, 
+  License
+
+### 2. Source files under `src/`
+
+**`src/cli.ts`** — Entry point. Uses `commander` to define:
+  - `gitpulse review` — reviews staged diff (default command)
+  - `gitpulse review --full` — reviews entire HEAD diff, not just staged
+  - `gitpulse config --set <key> <value>` — saves a config value to .gitpulserc
+  - `gitpulse config --show` — prints current config
+  - `gitpulse init` — sets up the git pre-push hook automatically
+  - `--model <name>` flag to override the default Groq model at runtime
+  - `--verbose` flag to print the raw diff before the review
+  - `--json` flag to output the review as raw JSON (for CI/CD piping)
+
+**`src/git.ts`** — Git utilities:
+  - `getStagedDiff(): Promise<string>` — returns staged diff using simple-git
+  - `getFullDiff(): Promise<string>` — returns diff of last commit vs HEAD
+  - `getRepoName(): Promise<string>` — returns the repo name from remote URL 
+    or folder name as fallback
+  - `isGitRepo(): Promise<boolean>` — checks if current dir is a git repo
+  - Proper error handling: throw descriptive errors if not a git repo or 
+    if diff is empty
+
+**`src/ai.ts`** — Groq API integration:
+  - Initialize the Groq client with: `new Groq({ apiKey: process.env.GROQ_API_KEY })`
+  - Throw a clear, friendly error if `GROQ_API_KEY` is not set:
+    "Missing GROQ_API_KEY. Get your free key at https://console.groq.com"
+  - `reviewDiff(diff: string, options: ReviewOptions): Promise<ReviewResult>`
+  - `ReviewOptions` type: `{ model: string, language?: string }`
+  - `ReviewResult` type with fields: `summary: string`, `bugs: Issue[]`, 
+    `security: Issue[]`, `style: Issue[]`, `suggestions: Issue[]`, 
+    `score: number` (0-100 overall quality score)
+  - `Issue` type: `{ severity: 'critical' | 'warning' | 'info', file: string,
+    line?: number, message: string, suggestion?: string }`
+  - Call `groq.chat.completions.create()` with:
+      - `model` from ReviewOptions
+      - `messages`: a system message + user message containing the diff
+      - `response_format: { type: "json_object" }` to enforce JSON output
+      - `temperature: 0.2` for consistent, deterministic reviews
+      - `max_tokens: 2048`
+  - The system prompt must instruct the model to: act as a senior engineer, 
+    review the diff carefully, output ONLY valid JSON matching ReviewResult 
+    shape exactly, flag security vulnerabilities as critical severity, praise 
+    good patterns briefly in summary, be direct and specific (no filler phrases),
+    never include markdown or code fences in the response — raw JSON only
+  - Parse and validate the JSON response from `choices[0].message.content`; 
+    throw a descriptive error if the response is missing, malformed, or does 
+    not match the expected shape
+  - Also export: `listModels(): Promise<string[]>` — calls `groq.models.list()` 
+    and returns an array of available model IDs, so users can discover 
+    what models they can pass to --model
+
+**`src/config.ts`** — Config manager:
+  - Reads/writes `.gitpulserc` JSON file in the current working directory
+  - Default config: 
+    `{ model: "llama-3.3-70b-versatile", maxDiffLines: 2000, language: "auto" }`
+  - `getConfig(): Config` — merges defaults with file values
+  - `setConfig(key: string, value: string): void` — updates one key and saves
+  - `showConfig(): void` — pretty-prints current config
+
+**`src/display.ts`** — Terminal output renderer:
+  - `renderReview(result: ReviewResult, repoName: string): void`
+  - Shows: a header box with repo name + overall score (color-coded: 
+    green 80+, yellow 60-79, red <60)
+  - Summary section with the AI summary text
+  - Four sections (Bugs, Security, Style, Suggestions) — only shown if 
+    non-empty, each issue color-coded by severity:
+      critical → red, warning → yellow, info → cyan
+  - A footer line: "Powered by Groq ⚡ — Run `git push` to proceed or fix issues first"
+  - `renderError(message: string): void` — styled red error box
+  - `renderEmpty(): void` — friendly message when there's nothing staged
+
+**`src/hooks.ts`** — Git hook installer:
+  - `installPrePushHook(): void` — writes a shell script to `.git/hooks/pre-push`
+    that runs `gitpulse review` and aborts the push if score < 60
+  - `uninstallPrePushHook(): void` — removes the hook
+  - Check if a hook already exists and prompt the user before overwriting
+
+### 3. Tests under `tests/`
+- `tests/git.test.ts` — unit tests for `isGitRepo()` and diff parsing edge cases
+- `tests/ai.test.ts` — unit tests for JSON parsing/validation in `reviewDiff`, 
+  mock the `groq-sdk` using vitest's `vi.mock()`; test that missing GROQ_API_KEY 
+  throws the correct error message
+- `tests/config.test.ts` — unit tests for getConfig merging defaults and setConfig
+
+### 4. GitHub files
+- `.github/workflows/ci.yml` — GitHub Actions workflow: runs on push to main 
+  and on PRs. Steps: checkout, setup Node 20, npm ci, npm run lint, npm test, 
+  npm run build
+- `.github/CONTRIBUTING.md` — how to fork, set up GROQ_API_KEY locally, 
+  run tests, and submit a PR
+- `.github/ISSUE_TEMPLATE/bug_report.md` — structured bug report template
+
+---
+
+## OUTPUT
+Deliver the complete project with the following requirements:
+
+1. **All files created** — every file listed above must exist with full, 
+   working code. No placeholders, no `// TODO` stubs, no skeleton files.
+
+2. **Runnable immediately** — after `npm install && npm run build`, 
+   the command `node dist/cli.js review` must work inside a git repo 
+   with staged changes, given a valid `GROQ_API_KEY` env variable.
+
+3. **Code quality**:
+   - All TypeScript, no plain JS
+   - Strict types throughout — no `any`
+   - Every async function has try/catch with meaningful error messages
+   - No hardcoded API keys anywhere — always read from `process.env.GROQ_API_KEY`
+
+4. **Terminal review output** must follow this layout:
+   ╔══════════════════════════════════════╗
+   ║  gitpulse • my-repo  Score: 87/100  ║
+   ╚══════════════════════════════════════╝
+   📋 Summary
+   ...summary text...
+
+   🐛 Bugs (2)
+   [WARNING] src/auth.ts:42 — password logged in plaintext
+             → Use a redaction utility before logging
+
+   🔒 Security (1)
+   [CRITICAL] src/api.ts:17 — SQL query built with string concatenation
+              → Use parameterized queries
+
+   ✨ Suggestions (3)
+   [INFO] src/utils.ts — function name `doStuff` is not descriptive
+          → Rename to `sanitizeUserInput`
+
+   ⚡ Powered by Groq — Run `git push` to proceed or fix issues first
+
+5. **Create files in this order** so dependencies are clear:
+   package.json → tsconfig.json → src/config.ts → src/git.ts → 
+   src/ai.ts → src/display.ts → src/hooks.ts → src/cli.ts → 
+   tests/* → .github/* → README.md
+
+6. After creating all files, run `npm install` and `npm run build` 
+   and confirm the build succeeds. Fix any TypeScript errors before finishing.
+
+7. End with a summary of: total files created, how to run the first 
+   review, and one suggested next feature to add.
