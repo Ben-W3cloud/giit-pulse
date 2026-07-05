@@ -1,5 +1,5 @@
 {
-  "name": "gitpulse",
+  "name": "giit-pulse",
   "version": "1.0.0",
   "description": "AI-powered terminal code reviewer for your staged git diffs, powered by Groq.",
   "type": "module",
